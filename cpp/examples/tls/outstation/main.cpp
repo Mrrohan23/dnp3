@@ -1,196 +1,109 @@
-/*
- * Licensed to Green Energy Corp (www.greenenergycorp.com) under one or
- * more contributor license agreements. See the NOTICE file distributed
- * with this work for additional information regarding copyright ownership.
- * Green Energy Corp licenses this file to you under the Apache License,
- * Version 2.0 (the "License"); you may not use this file except in
- * compliance with the License.  You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- *
- * This project was forked on 01/01/2013 by Automatak, LLC and modifications
- * may have been made to this file. Automatak, LLC licenses these modifications
- * to you under the terms of the License.
- */
-#include <asiodnp3/DNP3Manager.h>
-#include <asiodnp3/PrintingSOEHandler.h>
-#include <asiodnp3/PrintingChannelListener.h>
-#include <asiodnp3/ConsoleLogger.h>
-#include <asiodnp3/UpdateBuilder.h>
-
-#include <asiopal/UTCTimeSource.h>
-#include <opendnp3/outstation/SimpleCommandHandler.h>
-
-#include <opendnp3/outstation/Database.h>
-
-#include <opendnp3/LogLevels.h>
-
+#include <iostream>
 #include <string>
 #include <thread>
-#include <iostream>
+#include <chrono>
+#include <boost/asio.hpp>
+
+#include <asiodnp3/DNP3Manager.h>
+#include <asiodnp3/PrintingChannelListener.h>
+#include <asiodnp3/PrintingSOEHandler.h>
+#include <asiodnp3/DefaultOutstationApplication.h>
+#include <opendnp3/outstation/SimpleCommandHandler.h>
+#include <opendnp3/LogLevels.h>
+#include <asiodnp3/UpdateBuilder.h>
+
+#include <asiodnp3/TLSConfig.h>
 
 using namespace std;
-using namespace opendnp3;
-using namespace openpal;
-using namespace asiopal;
+using namespace boost::asio;
 using namespace asiodnp3;
+using namespace opendnp3;
 
-void ConfigureDatabase(DatabaseConfig& config)
+void handle_sensor_data(const std::string& data, std::shared_ptr<IOutstation> outstation)
 {
-	// example of configuring analog index 0 for Class2 with floating point variations by default
-	config.analog[0].clazz = PointClass::Class2;
-	config.analog[0].svariation = StaticAnalogVariation::Group30Var5;
-	config.analog[0].evariation = EventAnalogVariation::Group32Var7;
+    float temperature, pressure, humidity;
+    sscanf(data.c_str(), "%f,%f,%f", &temperature, &pressure, &humidity);
+
+    UpdateBuilder builder;
+    builder.Update(Analog(temperature), 0);
+    builder.Update(Analog(pressure), 1);
+    builder.Update(Analog(humidity), 2);
+
+    outstation->Apply(builder.Build());
 }
 
-struct State
+void start_python_data_server(std::shared_ptr<IOutstation> outstation)
 {
-	uint32_t count = 0;
-	double value = 0;
-	bool binary = false;
-	DoubleBit dbit = DoubleBit::DETERMINED_OFF;
-};
+    try {
+        io_context io;
+        ip::tcp::acceptor acceptor(io, ip::tcp::endpoint(ip::tcp::v4(), 15000));
+        std::cout << "[INFO] Listening for Python sensor data on port 15000..." << std::endl;
 
-void AddUpdates(UpdateBuilder& builder, State& state, const std::string& arguments);
+        while (true) {
+            ip::tcp::socket socket(io);
+            acceptor.accept(socket);
+            std::cout << "[INFO] Python client connected." << std::endl;
 
-int main(int argc, char* argv[])
-{
-	if (argc != 4)
-	{
-		std::cout << "usage: master-gprs-tls-demo <ca certificate> <certificate chain> <private key>" << std::endl;
-		return -1;
-	}
+            char data[1024];
+            size_t length = socket.read_some(buffer(data));
+            data[length] = '\0';
+            std::string received_data(data);
 
-	std::string caCertificate(argv[1]);
-	std::string certificateChain(argv[2]);
-	std::string privateKey(argv[3]);
+            std::cout << "[DATA RECEIVED] " << received_data << std::endl;
+            handle_sensor_data(received_data, outstation);
 
-	std::cout << "Using CA certificate: " << caCertificate << std::endl;
-	std::cout << "Using certificate chain: " << certificateChain << std::endl;
-	std::cout << "Using private key file: " << privateKey << std::endl;
+            socket.close();
+        }
 
-	// Specify what log levels to use. NORMAL is warning and above
-	// You can add all the comms logging by uncommenting below.
-	const uint32_t FILTERS = levels::NORMAL; // | levels::ALL_COMMS;
-
-	// This is the main point of interaction with the stack
-	// Allocate a single thread to the pool since this is a single outstation
-	DNP3Manager manager(1, ConsoleLogger::Create());
-
-	std::error_code ec;
-
-	// Create a TCP server (listener)
-	auto channel = manager.AddTLSClient(
-	                   "server",
-	                   FILTERS,
-	                   ChannelRetry::Default(),
-	                   "127.0.0.1",
-	                   "0.0.0.0",
-	                   20001,
-	                   TLSConfig(
-	                       caCertificate,
-	                       certificateChain,
-	                       privateKey,
-	                       2
-	                   ),
-	                   PrintingChannelListener::Create(),
-	                   ec
-	               );
-
-	if (ec)
-	{
-		std::cout << "Unable to create tls server: " << ec.message() << std::endl;
-		return ec.value();
-	}
-
-	// The main object for a outstation. The defaults are useable,
-	// but understanding the options are important.
-	OutstationStackConfig stackConfig(DatabaseSizes::AllTypes(10));
-
-	// specify the maximum size of the event buffers
-	stackConfig.outstation.eventBufferConfig = EventBufferConfig::AllTypes(10);
-
-	// you can override an default outstation parameters here
-	// in this example, we've enabled the oustation to use unsolicted reporting
-	// if the master enables it
-	stackConfig.outstation.params.allowUnsolicited = true;
-
-	// You can override the default link layer settings here
-	// in this example we've changed the default link layer addressing
-	stackConfig.link.LocalAddr = 10;
-	stackConfig.link.RemoteAddr = 1;
-
-	// You can optionally change the default reporting variations or class assignment prior to enabling the outstation
-	ConfigureDatabase(stackConfig.dbConfig);
-
-	// Create a new outstation with a log level, command handler, and
-	// config info this	returns a thread-safe interface used for
-	// updating the outstation's database.
-	auto outstation = channel->AddOutstation("outstation", SuccessCommandHandler::Create(), DefaultOutstationApplication::Create(), stackConfig);
-
-	// Enable the outstation and start communications
-	outstation->Enable();
-
-	// variables used in example loop
-	string input;
-	State state;
-
-	while (true)
-	{
-		std::cout << "Enter one or more measurement changes then press <enter>" << std::endl;
-		std::cout << "c = counter, b = binary, d = doublebit, a = analog, 'quit' = exit" << std::endl;
-		std::cin >> input;
-
-		if (input == "quit") return 0;
-		else
-		{
-			UpdateBuilder builder;
-			AddUpdates(builder, state, input);
-			outstation->Apply(builder.Build());
-		}
-	}
-
-	return 0;
+    } catch (const std::exception& e) {
+        std::cerr << "[ERROR] Python TCP server failed: " << e.what() << std::endl;
+    }
 }
 
-void AddUpdates(UpdateBuilder& builder, State& state, const std::string& arguments)
+int main()
 {
-	for (const char& c : arguments)
-	{
-		switch (c)
-		{
-		case('c'):
-			{
-				builder.Update(Counter(state.count), 0);
-				++state.count;
-				break;
-			}
-		case('a'):
-			{
-				builder.Update(Analog(state.value), 0);
-				state.value += 1;
-				break;
-			}
-		case('b'):
-			{
-				builder.Update(Binary(state.binary), 0);
-				state.binary = !state.binary;
-				break;
-			}
-		case('d'):
-			{
-				builder.Update(DoubleBitBinary(state.dbit), 0);
-				state.dbit = (state.dbit == DoubleBit::DETERMINED_OFF) ? DoubleBit::DETERMINED_ON : DoubleBit::DETERMINED_OFF;
-				break;
-			}
-		default:
-			break;
-		}
-	}
+    std::cout << "[INFO] Starting DNP3 Outstation with TLS..." << std::endl;
+
+    const uint32_t FILTERS = levels::NORMAL | levels::ALL_COMMS;
+    DNP3Manager manager(1, ConsoleLogger::Create());
+
+    // TLS configuration
+    TLSConfig tlsConfig(
+        "server-cert.pem",   // Server cert
+        "server-key.pem",    // Server private key
+        "ca-cert.pem",       // Trusted CA certs
+        CertificateMode::VerifyIfPresent
+    );
+
+    auto channel = manager.AddTLSServer(
+        "tls-server",
+        FILTERS,
+        ChannelRetry::Default(),
+        tlsConfig,
+        "0.0.0.0",
+        20000,
+        PrintingChannelListener::Create()
+    );
+
+    OutstationStackConfig stackConfig(DatabaseSizes::AllTypes(10));
+    stackConfig.link.LocalAddr = 10;
+    stackConfig.link.RemoteAddr = 1;
+    stackConfig.outstation.eventBufferConfig = EventBufferConfig::AllTypes(10);
+    stackConfig.outstation.params.allowUnsolicited = true;
+
+    auto outstation = channel->AddOutstation(
+        "outstation",
+        SuccessCommandHandler::Create(),
+        DefaultOutstationApplication::Create(),
+        stackConfig
+    );
+
+    outstation->Enable();
+
+    // Run Python listener on a separate thread
+    std::thread pythonListener(start_python_data_server, outstation);
+    pythonListener.join();
+
+    return 0;
 }
+
