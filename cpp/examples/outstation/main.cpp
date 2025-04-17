@@ -8,26 +8,22 @@
 #include <asiodnp3/UpdateBuilder.h>
 #include <opendnp3/outstation/SimpleCommandHandler.h>
 #include <opendnp3/outstation/IOutstationApplication.h>
-#include <openpal/executor/UTCTimestamp.h>
 
 using namespace std;
 using namespace boost::asio;
 using namespace asiodnp3;
 using namespace opendnp3;
 
-// Minimal custom application class
+// Minimal application, only what's supported
 class BasicOutstationApp : public IOutstationApplication {
 public:
-    bool SupportsWriteTime() const override { return false; }
-    bool WriteAbsoluteTime(const openpal::UTCTimestamp&) override { return false; }
-    bool SupportsAssignClass() const override { return false; }
     RestartMode ColdRestartSupport() const override { return RestartMode::UNSUPPORTED; }
     RestartMode WarmRestartSupport() const override { return RestartMode::UNSUPPORTED; }
     uint16_t ColdRestart() override { return 0; }
     uint16_t WarmRestart() override { return 0; }
 };
 
-// Process the sensor data and update DNP3 outstation
+// Handles sensor input like "24.5,1012.0,55.2"
 void handle_sensor_data(const std::string& data, std::shared_ptr<IOutstation> outstation) {
     float temp, pressure, humidity;
     if (sscanf(data.c_str(), "%f,%f,%f", &temp, &pressure, &humidity) == 3) {
@@ -36,13 +32,14 @@ void handle_sensor_data(const std::string& data, std::shared_ptr<IOutstation> ou
         builder.Update(Analog(pressure), 1);
         builder.Update(Analog(humidity), 2);
         outstation->Apply(builder.Build());
+
         std::cout << "[UPDATED] T=" << temp << ", P=" << pressure << ", H=" << humidity << std::endl;
     } else {
-        std::cerr << "[ERROR] Invalid sensor format: " << data << std::endl;
+        std::cerr << "[ERROR] Invalid format: " << data << std::endl;
     }
 }
 
-// TCP listener to receive data from Python
+// TCP server to receive Python data
 void start_python_server(std::shared_ptr<IOutstation> outstation) {
     try {
         io_context io;
@@ -73,10 +70,13 @@ int main() {
 
     DNP3Manager manager(1);
 
+    // Fallback retry config (if ChannelRetry not available)
+    auto retry = openpal::TimeDuration::Seconds(5);
+
     auto channel = manager.AddTCPServer(
         "server",
         0,  // No log filters
-        ChannelRetry::Default(),
+        retry,
         "0.0.0.0",
         20000,
         PrintingChannelListener::Create()
