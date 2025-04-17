@@ -1,28 +1,38 @@
 #include <iostream>
 #include <string>
 #include <thread>
+#include <chrono>
 #include <boost/asio.hpp>
 
 #include <asiodnp3/DNP3Manager.h>
 #include <asiodnp3/PrintingChannelListener.h>
-#include <asiodnp3/ConsoleLogger.h>
-#include <asiodnp3/UpdateBuilder.h>
-#include <asiodnp3/DefaultOutstationApplication.h>
-#include <asiodnp3/TLSConfig.h>
-
+#include <asiodnp3/PrintingSOEHandler.h>
 #include <opendnp3/outstation/SimpleCommandHandler.h>
 #include <opendnp3/LogLevels.h>
-#include <opendnp3/outstation/DatabaseConfig.h>
-#include <opendnp3/outstation/EventBufferConfig.h>
+#include <asiodnp3/UpdateBuilder.h>
+#include <opendnp3/outstation/IOutstationApplication.h>
 
 using namespace std;
 using namespace boost::asio;
-using namespace opendnp3;
 using namespace asiodnp3;
+using namespace opendnp3;
+
+// Basic custom application class to replace DefaultOutstationApplication
+class BasicOutstationApp : public IOutstationApplication
+{
+public:
+    bool SupportsWriteTime() const override { return false; }
+    bool WriteAbsoluteTime(const UTCTimestamp&) override { return false; }
+    bool SupportsAssignClass() const override { return false; }
+    IINField ColdRestartSupport() const override { return IINField(); }
+    IINField WarmRestartSupport() const override { return IINField(); }
+    uint16_t ColdRestart() override { return 0; }
+    uint16_t WarmRestart() override { return 0; }
+};
 
 void handle_sensor_data(const std::string& data, std::shared_ptr<IOutstation> outstation)
 {
-    float temperature = 0, pressure = 0, humidity = 0;
+    float temperature, pressure, humidity;
     sscanf(data.c_str(), "%f,%f,%f", &temperature, &pressure, &humidity);
 
     UpdateBuilder builder;
@@ -36,17 +46,17 @@ void handle_sensor_data(const std::string& data, std::shared_ptr<IOutstation> ou
 void start_python_data_server(std::shared_ptr<IOutstation> outstation)
 {
     try {
-        boost::asio::io_context io;
+        io_context io;
         ip::tcp::acceptor acceptor(io, ip::tcp::endpoint(ip::tcp::v4(), 15000));
-        std::cout << "[INFO] Listening for sensor data on port 15000..." << std::endl;
+        std::cout << "[INFO] Listening for Python sensor data on port 15000..." << std::endl;
 
         while (true) {
             ip::tcp::socket socket(io);
             acceptor.accept(socket);
-            std::cout << "[INFO] Sensor data client connected." << std::endl;
+            std::cout << "[INFO] Python client connected." << std::endl;
 
             char data[1024];
-            size_t length = socket.read_some(boost::asio::buffer(data));
+            size_t length = socket.read_some(buffer(data));
             data[length] = '\0';
             std::string received_data(data);
 
@@ -57,51 +67,44 @@ void start_python_data_server(std::shared_ptr<IOutstation> outstation)
         }
 
     } catch (const std::exception& e) {
-        std::cerr << "[ERROR] Sensor server failed: " << e.what() << std::endl;
+        std::cerr << "[ERROR] Python TCP server failed: " << e.what() << std::endl;
     }
 }
 
 int main()
 {
-    std::cout << "[INFO] Starting TLS-enabled DNP3 Outstation..." << std::endl;
+    std::cout << "[INFO] Starting DNP3 Outstation without TLS..." << std::endl;
 
     const uint32_t FILTERS = levels::NORMAL | levels::ALL_COMMS;
     DNP3Manager manager(1, ConsoleLogger::Create());
 
-    TLSConfig tlsConfig(
-        "server-cert.pem",  // Server certificate
-        "server-key.pem",   // Server private key
-        "ca-cert.pem",      // Trusted CA cert
-        CertificateMode::VerifyIfPresent
-    );
-
-    auto channel = manager.AddTLSServer(
-        "tls-server",
+    // Plain TCP server
+    auto channel = manager.AddTCPServer(
+        "tcp-server",
         FILTERS,
         ChannelRetry::Default(),
-        tlsConfig,
         "0.0.0.0",
         20000,
         PrintingChannelListener::Create()
     );
 
-    OutstationStackConfig config(DatabaseSizes::AllTypes(10));
-    config.link.LocalAddr = 10;
-    config.link.RemoteAddr = 1;
-    config.outstation.eventBufferConfig = EventBufferConfig::AllTypes(10);
-    config.outstation.params.allowUnsolicited = true;
+    OutstationStackConfig stackConfig(DatabaseSizes::AllTypes(10));
+    stackConfig.link.LocalAddr = 10;
+    stackConfig.link.RemoteAddr = 1;
+    stackConfig.outstation.eventBufferConfig = EventBufferConfig::AllTypes(10);
+    stackConfig.outstation.params.allowUnsolicited = true;
 
     auto outstation = channel->AddOutstation(
         "outstation",
         SuccessCommandHandler::Create(),
-        DefaultOutstationApplication::Create(),
-        config
+        std::make_shared<BasicOutstationApp>(),
+        stackConfig
     );
 
     outstation->Enable();
 
-    std::thread sensor_thread(start_python_data_server, outstation);
-    sensor_thread.join();
+    std::thread pythonListener(start_python_data_server, outstation);
+    pythonListener.join();
 
     return 0;
 }
