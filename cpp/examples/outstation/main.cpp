@@ -22,49 +22,12 @@ using namespace asiopal;
 using namespace asiodnp3;
 using boost::asio::ip::tcp;
 
-struct State {
-    uint32_t count = 0;
-    double value = 0;
-    bool binary = false;
-    DoubleBit dbit = DoubleBit::DETERMINED_OFF;
-};
-
 void ConfigureDatabase(DatabaseConfig& config)
 {
-    config.analog[0].clazz = PointClass::Class2;
-    config.analog[0].svariation = StaticAnalogVariation::Group30Var5;
-    config.analog[0].evariation = EventAnalogVariation::Group32Var7;
-
-    config.analog[1].clazz = PointClass::Class2;
-    config.analog[2].clazz = PointClass::Class2;
-}
-
-void AddUpdates(UpdateBuilder& builder, State& state, const std::string& arguments)
-{
-    for (const char& c : arguments)
-    {
-        switch (c)
-        {
-        case 'c':
-            builder.Update(Counter(state.count), 0);
-            ++state.count;
-            break;
-        case 'a':
-            builder.Update(Analog(state.value), 0);
-            state.value += 1;
-            break;
-        case 'b':
-            builder.Update(Binary(state.binary), 0);
-            state.binary = !state.binary;
-            break;
-        case 'd':
-            builder.Update(DoubleBitBinary(state.dbit), 0);
-            state.dbit = (state.dbit == DoubleBit::DETERMINED_OFF) ? DoubleBit::DETERMINED_ON : DoubleBit::DETERMINED_OFF;
-            break;
-        default:
-            break;
-        }
-    }
+    config.analog[0].clazz = PointClass::Class1; // Temperature
+    config.analog[1].clazz = PointClass::Class1; // Pressure
+    config.analog[2].clazz = PointClass::Class1; // Humidity
+    config.binary[0].clazz = PointClass::Class1; // Binary state
 }
 
 void ReceiveSensorData(std::shared_ptr<IOutstation> outstation)
@@ -87,24 +50,28 @@ void ReceiveSensorData(std::shared_ptr<IOutstation> outstation)
             std::cout << "[DATA RECEIVED] " << data << std::endl;
 
             std::istringstream iss(data);
-            std::string tempStr, pressStr, humidStr;
+            std::string tempStr, pressStr, humidStr, binStr;
 
             if (std::getline(iss, tempStr, ',') &&
                 std::getline(iss, pressStr, ',') &&
-                std::getline(iss, humidStr, ','))
+                std::getline(iss, humidStr, ',') &&
+                std::getline(iss, binStr, ','))
             {
                 float temperature = std::stof(tempStr);
                 float pressure = std::stof(pressStr);
                 float humidity = std::stof(humidStr);
+                bool binary_state = std::stoi(binStr) != 0;
 
                 UpdateBuilder builder;
                 builder.Update(Analog(temperature), 0);
                 builder.Update(Analog(pressure), 1);
                 builder.Update(Analog(humidity), 2);
+                builder.Update(Binary(binary_state), 0);
                 outstation->Apply(builder.Build());
 
                 std::cout << "[INFO] Sent to outstation: T=" << temperature
-                          << ", P=" << pressure << ", H=" << humidity << std::endl;
+                          << ", P=" << pressure << ", H=" << humidity
+                          << ", Bin=" << binary_state << std::endl;
             }
             else
             {
@@ -117,24 +84,6 @@ void ReceiveSensorData(std::shared_ptr<IOutstation> outstation)
     catch (const std::exception& e)
     {
         std::cerr << "[ERROR] Exception in ReceiveSensorData: " << e.what() << std::endl;
-    }
-}
-
-void HandleUserInput(std::shared_ptr<IOutstation> outstation)
-{
-    string input;
-    State state;
-    while (true)
-    {
-        std::cout << "Enter one or more measurement changes then press <enter>" << std::endl;
-        std::cout << "c = counter, b = binary, d = doublebit, a = analog, 'quit' = exit" << std::endl;
-        std::cin >> input;
-
-        if (input == "quit") exit(0);
-
-        UpdateBuilder builder;
-        AddUpdates(builder, state, input);
-        outstation->Apply(builder.Build());
     }
 }
 
@@ -158,10 +107,7 @@ int main(int argc, char* argv[])
     outstation->Enable();
 
     std::thread sensorThread(ReceiveSensorData, outstation);
-    std::thread inputThread(HandleUserInput, outstation);
-
     sensorThread.join();
-    inputThread.join();
 
     return 0;
 }
