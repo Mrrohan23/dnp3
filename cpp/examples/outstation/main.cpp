@@ -153,7 +153,7 @@ int main(int argc, char* argv[])
 
     OutstationStackConfig config(DatabaseSizes::AllTypes(10));
     config.outstation.eventBufferConfig = EventBufferConfig::AllTypes(10);
-    config.outstation.params.allowUnsolicited = true; // ✅ enable unsolicited messaging
+    config.outstation.params.allowUnsolicited = true;
     config.link.LocalAddr = 10;
     config.link.RemoteAddr = 1;
     config.link.KeepAliveTimeout = openpal::TimeDuration::Max();
@@ -161,7 +161,7 @@ int main(int argc, char* argv[])
     ConfigureDatabase(config.dbConfig);
 
     auto outstation = channel->AddOutstation("outstation", SuccessCommandHandler::Create(), DefaultOutstationApplication::Create(), config);
-    outstation->Enable(); // ✅ enable outstation
+    outstation->Enable(); // 
 
     std::thread sensorThread(ReceiveSensorData, outstation);
     std::thread inputThread(HandleUserInput, outstation);
