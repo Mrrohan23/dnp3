@@ -24,10 +24,14 @@ using boost::asio::ip::tcp;
 
 void ConfigureDatabase(DatabaseConfig& config)
 {
-    config.analog[0].clazz = PointClass::Class1; // Temperature
-    config.analog[1].clazz = PointClass::Class1; // Pressure
-    config.analog[2].clazz = PointClass::Class1; // Humidity
-    config.binary[0].clazz = PointClass::Class1; // Binary state
+    config.analog[0].clazz = PointClass::Class1;
+    config.analog[0].svariation = StaticAnalogVariation::Group30Var5;
+    config.analog[0].evariation = EventAnalogVariation::Group32Var7;
+
+    config.analog[1].clazz = PointClass::Class1;
+    config.analog[2].clazz = PointClass::Class1;
+
+    config.binary[0].clazz = PointClass::Class1;
 }
 
 void ReceiveSensorData(std::shared_ptr<IOutstation> outstation)
@@ -50,28 +54,29 @@ void ReceiveSensorData(std::shared_ptr<IOutstation> outstation)
             std::cout << "[DATA RECEIVED] " << data << std::endl;
 
             std::istringstream iss(data);
-            std::string tempStr, pressStr, humidStr, binStr;
+            std::string tempStr, pressStr, humidStr, binaryStr;
 
             if (std::getline(iss, tempStr, ',') &&
                 std::getline(iss, pressStr, ',') &&
                 std::getline(iss, humidStr, ',') &&
-                std::getline(iss, binStr, ','))
+                std::getline(iss, binaryStr, ','))
             {
                 float temperature = std::stof(tempStr);
                 float pressure = std::stof(pressStr);
                 float humidity = std::stof(humidStr);
-                bool binary_state = std::stoi(binStr) != 0;
+                bool binary = (binaryStr == "1");
 
                 UpdateBuilder builder;
                 builder.Update(Analog(temperature), 0);
                 builder.Update(Analog(pressure), 1);
                 builder.Update(Analog(humidity), 2);
-                builder.Update(Binary(binary_state), 0);
+                builder.Update(Binary(binary), 0); // binary point 0
+
                 outstation->Apply(builder.Build());
 
                 std::cout << "[INFO] Sent to outstation: T=" << temperature
                           << ", P=" << pressure << ", H=" << humidity
-                          << ", Bin=" << binary_state << std::endl;
+                          << ", Binary=" << binary << std::endl;
             }
             else
             {
@@ -87,27 +92,65 @@ void ReceiveSensorData(std::shared_ptr<IOutstation> outstation)
     }
 }
 
+void HandleUserInput(std::shared_ptr<IOutstation> outstation)
+{
+    string input;
+    while (true)
+    {
+        std::cout << "Manual input (format: a=analog, b=binary, quit to exit): ";
+        std::cin >> input;
+
+        if (input == "quit") break;
+
+        UpdateBuilder builder;
+        if (input == "a") {
+            builder.Update(Analog(42.0), 0);
+        } else if (input == "b") {
+            builder.Update(Binary(true), 0);
+        }
+
+        outstation->Apply(builder.Build());
+    }
+}
+
 int main(int argc, char* argv[])
 {
     const uint32_t FILTERS = levels::NORMAL | levels::ALL_COMMS;
     DNP3Manager manager(1, ConsoleLogger::Create());
 
-    auto channel = manager.AddTCPServer("server", FILTERS, ChannelRetry::Default(), "0.0.0.0", 20000, PrintingChannelListener::Create());
+    auto channel = manager.AddTCPServer(
+        "server",
+        FILTERS,
+        ChannelRetry::Default(),
+        "0.0.0.0",
+        20000,
+        PrintingChannelListener::Create()
+    );
 
     OutstationStackConfig config(DatabaseSizes::AllTypes(10));
-    config.outstation.eventBufferConfig = EventBufferConfig::AllTypes(10);
-    config.outstation.params.allowUnsolicited = true;
+    config.outstation.eventBufferConfig = EventBufferConfig::AllTypes(10); // enable historical buffering
+    config.outstation.params.allowUnsolicited = true;                      // allow unsolicited
     config.link.LocalAddr = 10;
     config.link.RemoteAddr = 1;
     config.link.KeepAliveTimeout = openpal::TimeDuration::Max();
 
     ConfigureDatabase(config.dbConfig);
 
-    auto outstation = channel->AddOutstation("outstation", SuccessCommandHandler::Create(), DefaultOutstationApplication::Create(), config);
+    auto outstation = channel->AddOutstation(
+        "outstation",
+        SuccessCommandHandler::Create(),
+        DefaultOutstationApplication::Create(),
+        config
+    );
+
     outstation->Enable();
+    outstation->EnableUnsolicited(); // 🔥 actively push updates
 
     std::thread sensorThread(ReceiveSensorData, outstation);
+    std::thread inputThread(HandleUserInput, outstation);
+
     sensorThread.join();
+    inputThread.join();
 
     return 0;
 }
