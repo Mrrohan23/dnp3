@@ -31,12 +31,12 @@ struct State {
 
 void ConfigureDatabase(DatabaseConfig& config)
 {
-    config.analog[0].clazz = PointClass::Class1;
-    config.analog[0].svariation = StaticAnalogVariation::Group30Var5;
-    config.analog[0].evariation = EventAnalogVariation::Group32Var7;
-
-    config.analog[1].clazz = PointClass::Class1;
-    config.analog[2].clazz = PointClass::Class1;
+    for (int i = 0; i < 3; ++i)
+    {
+        config.analog[i].clazz = PointClass::Class1;
+        config.analog[i].svariation = StaticAnalogVariation::Group30Var5;
+        config.analog[i].evariation = EventAnalogVariation::Group32Var7;
+    }
 
     config.binary[0].clazz = PointClass::Class1;
 }
@@ -102,15 +102,17 @@ void ReceiveSensorData(std::shared_ptr<IOutstation> outstation)
                 bool binaryValue = (binaryStr == "1");
 
                 UpdateBuilder builder;
-                builder.Update(Analog(temperature), 0);
-                builder.Update(Analog(pressure), 1);
-                builder.Update(Analog(humidity), 2);
-                builder.Update(Binary(binaryValue), 0);
+                builder.Update(Analog(temperature), 0); // temp
+                builder.Update(Analog(pressure), 1);     // pressure
+                builder.Update(Analog(humidity), 2);     // humidity
+                builder.Update(Binary(binaryValue), 0);  // binary
                 outstation->Apply(builder.Build());
 
                 std::cout << "[INFO] Sent to outstation: T=" << temperature
                           << ", P=" << pressure << ", H=" << humidity
                           << ", Binary=" << binaryValue << std::endl;
+
+                std::cout << "[DNP3] Class 1 event sent to ScadaBR." << std::endl;
             }
             else
             {
@@ -161,7 +163,7 @@ int main(int argc, char* argv[])
     ConfigureDatabase(config.dbConfig);
 
     auto outstation = channel->AddOutstation("outstation", SuccessCommandHandler::Create(), DefaultOutstationApplication::Create(), config);
-    outstation->Enable(); // 
+    outstation->Enable();
 
     std::thread sensorThread(ReceiveSensorData, outstation);
     std::thread inputThread(HandleUserInput, outstation);
