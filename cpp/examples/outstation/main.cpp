@@ -3,12 +3,10 @@
 #include <asiodnp3/PrintingChannelListener.h>
 #include <asiodnp3/ConsoleLogger.h>
 #include <asiodnp3/UpdateBuilder.h>
-
 #include <asiopal/UTCTimeSource.h>
 #include <opendnp3/outstation/SimpleCommandHandler.h>
 #include <opendnp3/outstation/IUpdateHandler.h>
 #include <opendnp3/LogLevels.h>
-
 #include <boost/asio.hpp>
 #include <iostream>
 #include <sstream>
@@ -31,14 +29,42 @@ struct State {
 
 void ConfigureDatabase(DatabaseConfig& config)
 {
-    for (int i = 0; i < 3; ++i)
-    {
-        config.analog[i].clazz = PointClass::Class1;
+    for (uint16_t i = 0; i < 3; ++i) {
+        config.analog[i].clazz = PointClass::Class2;
         config.analog[i].svariation = StaticAnalogVariation::Group30Var5;
         config.analog[i].evariation = EventAnalogVariation::Group32Var7;
     }
-
     config.binary[0].clazz = PointClass::Class1;
+    config.binary[0].svariation = StaticBinaryVariation::Group1Var2;
+    config.binary[0].evariation = EventBinaryVariation::Group2Var2;
+}
+
+void AddUpdates(UpdateBuilder& builder, State& state, const std::string& arguments)
+{
+    for (const char& c : arguments)
+    {
+        switch (c)
+        {
+        case 'c':
+            builder.Update(Counter(state.count), 0);
+            ++state.count;
+            break;
+        case 'a':
+            builder.Update(Analog(state.value), 0);
+            state.value += 1;
+            break;
+        case 'b':
+            builder.Update(Binary(state.binary), 0);
+            state.binary = !state.binary;
+            break;
+        case 'd':
+            builder.Update(DoubleBitBinary(state.dbit), 0);
+            state.dbit = (state.dbit == DoubleBit::DETERMINED_OFF) ? DoubleBit::DETERMINED_ON : DoubleBit::DETERMINED_OFF;
+            break;
+        default:
+            break;
+        }
+    }
 }
 
 void ReceiveSensorData(std::shared_ptr<IOutstation> outstation)
@@ -71,23 +97,19 @@ void ReceiveSensorData(std::shared_ptr<IOutstation> outstation)
                 float temperature = std::stof(tempStr);
                 float pressure = std::stof(pressStr);
                 float humidity = std::stof(humidStr);
-                bool binaryValue = (binaryStr == "1");
+                bool binary = std::stoi(binaryStr) != 0;
 
-                std::cout << "[DEBUG] Temperature: " << temperature << ", Pressure: " << pressure
-                          << ", Humidity: " << humidity << ", Binary: " << binaryValue << std::endl;
-
+                auto now = Timestamp::Now();
                 UpdateBuilder builder;
-                builder.Update(Analog(temperature), 0);  // Temperature
-                builder.Update(Analog(pressure), 1);     // Pressure
-                builder.Update(Analog(humidity), 2);     // Humidity
-                builder.Update(Binary(binaryValue), 3);  // Binary
-                outstation->Apply(builder.Build());
+                builder.Update(Analog(temperature, now), 0);
+                builder.Update(Analog(pressure, now), 1);
+                builder.Update(Analog(humidity, now), 2);
+                builder.Update(Binary(binary, now), 0);
 
+                outstation->Apply(builder.Build());
                 std::cout << "[INFO] Sent to outstation: T=" << temperature
                           << ", P=" << pressure << ", H=" << humidity
-                          << ", Binary=" << binaryValue << std::endl;
-
-                std::cout << "[DNP3] Class 1 event sent to ScadaBR." << std::endl;
+                          << ", Binary=" << binary << std::endl;
             }
             else
             {
@@ -100,6 +122,22 @@ void ReceiveSensorData(std::shared_ptr<IOutstation> outstation)
     catch (const std::exception& e)
     {
         std::cerr << "[ERROR] Exception in ReceiveSensorData: " << e.what() << std::endl;
+    }
+}
+
+void HandleUserInput(std::shared_ptr<IOutstation> outstation)
+{
+    string input;
+    State state;
+    while (true)
+    {
+        std::cout << "Enter one or more measurement changes then press <enter>" << std::endl;
+        std::cout << "c = counter, b = binary, d = doublebit, a = analog, 'quit' = exit" << std::endl;
+        std::cin >> input;
+        if (input == "quit") exit(0);
+        UpdateBuilder builder;
+        AddUpdates(builder, state, input);
+        outstation->Apply(builder.Build());
     }
 }
 
@@ -123,7 +161,10 @@ int main(int argc, char* argv[])
     outstation->Enable();
 
     std::thread sensorThread(ReceiveSensorData, outstation);
+    std::thread inputThread(HandleUserInput, outstation);
+
     sensorThread.join();
+    inputThread.join();
 
     return 0;
 }
