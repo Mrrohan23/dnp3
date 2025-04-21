@@ -34,9 +34,8 @@ void ConfigureDatabase(DatabaseConfig& config)
         config.analog[i].svariation = StaticAnalogVariation::Group30Var5;
         config.analog[i].evariation = EventAnalogVariation::Group32Var7;
     }
+
     config.binary[0].clazz = PointClass::Class1;
-    config.binary[0].svariation = StaticBinaryVariation::Group1Var2;
-    config.binary[0].evariation = EventBinaryVariation::Group2Var2;
 }
 
 void AddUpdates(UpdateBuilder& builder, State& state, const std::string& arguments)
@@ -99,7 +98,8 @@ void ReceiveSensorData(std::shared_ptr<IOutstation> outstation)
                 float humidity = std::stof(humidStr);
                 bool binary = std::stoi(binaryStr) != 0;
 
-                auto now = Timestamp::Now();
+                auto now = asiopal::UTCTimeSource::Instance().Now();
+
                 UpdateBuilder builder;
                 builder.Update(Analog(temperature, now), 0);
                 builder.Update(Analog(pressure, now), 1);
@@ -109,7 +109,7 @@ void ReceiveSensorData(std::shared_ptr<IOutstation> outstation)
                 outstation->Apply(builder.Build());
                 std::cout << "[INFO] Sent to outstation: T=" << temperature
                           << ", P=" << pressure << ", H=" << humidity
-                          << ", Binary=" << binary << std::endl;
+                          << ", B=" << binary << std::endl;
             }
             else
             {
