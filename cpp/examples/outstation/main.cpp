@@ -102,10 +102,10 @@ void ReceiveSensorData(std::shared_ptr<IOutstation> outstation)
                 bool binaryValue = (binaryStr == "1");
 
                 UpdateBuilder builder;
-                builder.Update(Analog(temperature), 0); // temp
-                builder.Update(Analog(pressure), 1);     // pressure
-                builder.Update(Analog(humidity), 2);     // humidity
-                builder.Update(Binary(binaryValue), 0);  // binary
+                builder.Update(Analog(temperature), 0); // Temperature
+                builder.Update(Analog(pressure), 1);    // Pressure
+                builder.Update(Analog(humidity), 2);    // Humidity
+                builder.Update(Binary(binaryValue), 3); // Binary
                 outstation->Apply(builder.Build());
 
                 std::cout << "[INFO] Sent to outstation: T=" << temperature
