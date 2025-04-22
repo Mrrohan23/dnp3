@@ -29,13 +29,20 @@ struct State {
 
 void ConfigureDatabase(DatabaseConfig& config)
 {
-    for (uint16_t i = 0; i < 3; ++i) {
-        config.analog[i].clazz = PointClass::Class2;
-        config.analog[i].svariation = StaticAnalogVariation::Group30Var5;
-        config.analog[i].evariation = EventAnalogVariation::Group32Var7;
-    }
+    // Temperature
+    config.analog[0].clazz = PointClass::Class2;
+    config.analog[0].svariation = StaticAnalogVariation::Group30Var5;
+    config.analog[0].evariation = EventAnalogVariation::Group32Var7;
 
-    config.binary[0].clazz = PointClass::Class1;
+    // Pressure
+    config.analog[1].clazz = PointClass::Class2;
+    config.analog[1].svariation = StaticAnalogVariation::Group30Var5;
+    config.analog[1].evariation = EventAnalogVariation::Group32Var7;
+
+    // Humidity
+    config.analog[2].clazz = PointClass::Class2;
+    config.analog[2].svariation = StaticAnalogVariation::Group30Var5;
+    config.analog[2].evariation = EventAnalogVariation::Group32Var7;
 }
 
 void AddUpdates(UpdateBuilder& builder, State& state, const std::string& arguments)
@@ -72,7 +79,6 @@ void ReceiveSensorData(std::shared_ptr<IOutstation> outstation)
         boost::asio::io_context io_context;
         tcp::acceptor acceptor(io_context, tcp::endpoint(tcp::v4(), 15000));
         std::cout << "[INFO] Listening for sensor data on port 15000..." << std::endl;
-
         while (true)
         {
             tcp::socket socket(io_context);
@@ -86,30 +92,25 @@ void ReceiveSensorData(std::shared_ptr<IOutstation> outstation)
             std::cout << "[DATA RECEIVED] " << data << std::endl;
 
             std::istringstream iss(data);
-            std::string tempStr, pressStr, humidStr, binaryStr;
+            std::string tempStr, pressStr, humidStr;
 
             if (std::getline(iss, tempStr, ',') &&
                 std::getline(iss, pressStr, ',') &&
-                std::getline(iss, humidStr, ',') &&
-                std::getline(iss, binaryStr, ','))
+                std::getline(iss, humidStr, ','))
             {
                 float temperature = std::stof(tempStr);
                 float pressure = std::stof(pressStr);
                 float humidity = std::stof(humidStr);
-                bool binary = std::stoi(binaryStr) != 0;
-
-                auto now = asiopal::UTCTimeSource::Instance().Now();
 
                 UpdateBuilder builder;
-                builder.Update(Analog(temperature, now), 0);
-                builder.Update(Analog(pressure, now), 1);
-                builder.Update(Analog(humidity, now), 2);
-                builder.Update(Binary(binary, now), 0);
+                builder.Update(Analog(temperature), 0);  // Index 0 - Temperature
+                builder.Update(Analog(pressure), 1);     // Index 1 - Pressure
+                builder.Update(Analog(humidity), 2);     // Index 2 - Humidity
 
                 outstation->Apply(builder.Build());
+
                 std::cout << "[INFO] Sent to outstation: T=" << temperature
-                          << ", P=" << pressure << ", H=" << humidity
-                          << ", B=" << binary << std::endl;
+                          << ", P=" << pressure << ", H=" << humidity << std::endl;
             }
             else
             {
@@ -135,6 +136,7 @@ void HandleUserInput(std::shared_ptr<IOutstation> outstation)
         std::cout << "c = counter, b = binary, d = doublebit, a = analog, 'quit' = exit" << std::endl;
         std::cin >> input;
         if (input == "quit") exit(0);
+
         UpdateBuilder builder;
         AddUpdates(builder, state, input);
         outstation->Apply(builder.Build());
@@ -146,7 +148,14 @@ int main(int argc, char* argv[])
     const uint32_t FILTERS = levels::NORMAL | levels::ALL_COMMS;
     DNP3Manager manager(1, ConsoleLogger::Create());
 
-    auto channel = manager.AddTCPServer("server", FILTERS, ChannelRetry::Default(), "0.0.0.0", 20000, PrintingChannelListener::Create());
+    auto channel = manager.AddTCPServer(
+        "server",
+        FILTERS,
+        ChannelRetry::Default(),
+        "0.0.0.0",
+        20000,
+        PrintingChannelListener::Create()
+    );
 
     OutstationStackConfig config(DatabaseSizes::AllTypes(10));
     config.outstation.eventBufferConfig = EventBufferConfig::AllTypes(10);
@@ -157,7 +166,13 @@ int main(int argc, char* argv[])
 
     ConfigureDatabase(config.dbConfig);
 
-    auto outstation = channel->AddOutstation("outstation", SuccessCommandHandler::Create(), DefaultOutstationApplication::Create(), config);
+    auto outstation = channel->AddOutstation(
+        "outstation",
+        SuccessCommandHandler::Create(),
+        DefaultOutstationApplication::Create(),
+        config
+    );
+
     outstation->Enable();
 
     std::thread sensorThread(ReceiveSensorData, outstation);
