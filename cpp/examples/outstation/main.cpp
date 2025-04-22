@@ -44,8 +44,10 @@ void ConfigureDatabase(DatabaseConfig& config)
     config.analog[2].svariation = StaticAnalogVariation::Group30Var5;
     config.analog[2].evariation = EventAnalogVariation::Group32Var7;
 
-    // Binary input
+    // Binary input (e.g., switch)
     config.binary[0].clazz = PointClass::Class1;
+    config.binary[0].svariation = StaticBinaryVariation::Group1Var2;
+    config.binary[0].evariation = EventBinaryVariation::Group2Var2;
 }
 
 void AddUpdates(UpdateBuilder& builder, State& state, const std::string& arguments)
@@ -82,6 +84,7 @@ void ReceiveSensorData(std::shared_ptr<IOutstation> outstation)
         boost::asio::io_context io_context;
         tcp::acceptor acceptor(io_context, tcp::endpoint(tcp::v4(), 15000));
         std::cout << "[INFO] Listening for sensor data on port 15000..." << std::endl;
+
         while (true)
         {
             tcp::socket socket(io_context);
@@ -105,7 +108,7 @@ void ReceiveSensorData(std::shared_ptr<IOutstation> outstation)
                 float temperature = std::stof(tempStr);
                 float pressure = std::stof(pressStr);
                 float humidity = std::stof(humidStr);
-                bool binary = std::stoi(binaryStr) != 0;
+                bool binary = std::stoi(binaryStr);
 
                 UpdateBuilder builder;
                 builder.Update(Analog(temperature), 0);  // Temperature
@@ -164,9 +167,8 @@ int main(int argc, char* argv[])
         PrintingChannelListener::Create()
     );
 
-    OutstationStackConfig config;
-    config.dbConfig.analog.resize(3);  // Temperature, Pressure, Humidity
-    config.dbConfig.binary.resize(1);  // One binary input
+   
+    OutstationStackConfig config(DatabaseConfig(3, 1));
 
     config.outstation.eventBufferConfig = EventBufferConfig::AllTypes(10);
     config.outstation.params.allowUnsolicited = true;
