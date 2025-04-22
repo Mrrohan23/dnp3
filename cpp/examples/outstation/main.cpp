@@ -43,6 +43,9 @@ void ConfigureDatabase(DatabaseConfig& config)
     config.analog[2].clazz = PointClass::Class2;
     config.analog[2].svariation = StaticAnalogVariation::Group30Var5;
     config.analog[2].evariation = EventAnalogVariation::Group32Var7;
+
+    // Binary input
+    config.binary[0].clazz = PointClass::Class1;
 }
 
 void AddUpdates(UpdateBuilder& builder, State& state, const std::string& arguments)
@@ -92,25 +95,29 @@ void ReceiveSensorData(std::shared_ptr<IOutstation> outstation)
             std::cout << "[DATA RECEIVED] " << data << std::endl;
 
             std::istringstream iss(data);
-            std::string tempStr, pressStr, humidStr;
+            std::string tempStr, pressStr, humidStr, binaryStr;
 
             if (std::getline(iss, tempStr, ',') &&
                 std::getline(iss, pressStr, ',') &&
-                std::getline(iss, humidStr, ','))
+                std::getline(iss, humidStr, ',') &&
+                std::getline(iss, binaryStr, ','))
             {
                 float temperature = std::stof(tempStr);
                 float pressure = std::stof(pressStr);
                 float humidity = std::stof(humidStr);
+                bool binary = std::stoi(binaryStr) != 0;
 
                 UpdateBuilder builder;
-                builder.Update(Analog(temperature), 0);  // Index 0 - Temperature
-                builder.Update(Analog(pressure), 1);     // Index 1 - Pressure
-                builder.Update(Analog(humidity), 2);     // Index 2 - Humidity
+                builder.Update(Analog(temperature), 0);  // Temperature
+                builder.Update(Analog(pressure), 1);     // Pressure
+                builder.Update(Analog(humidity), 2);     // Humidity
+                builder.Update(Binary(binary), 0);       // Binary input
 
                 outstation->Apply(builder.Build());
 
                 std::cout << "[INFO] Sent to outstation: T=" << temperature
-                          << ", P=" << pressure << ", H=" << humidity << std::endl;
+                          << ", P=" << pressure << ", H=" << humidity
+                          << ", B=" << binary << std::endl;
             }
             else
             {
@@ -157,7 +164,10 @@ int main(int argc, char* argv[])
         PrintingChannelListener::Create()
     );
 
-    OutstationStackConfig config(DatabaseSizes::AllTypes(10));
+    OutstationStackConfig config;
+    config.dbConfig.analog.resize(3);  // Temperature, Pressure, Humidity
+    config.dbConfig.binary.resize(1);  // One binary input
+
     config.outstation.eventBufferConfig = EventBufferConfig::AllTypes(10);
     config.outstation.params.allowUnsolicited = true;
     config.link.LocalAddr = 10;
