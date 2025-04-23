@@ -22,7 +22,7 @@ using boost::asio::ip::tcp;
 
 void ConfigureDatabase(DatabaseConfig& config)
 {
-    // Only configure Analog 0 for temperature
+    // Temperature analog input
     config.analog[0].clazz = PointClass::Class2;
     config.analog[0].svariation = StaticAnalogVariation::Group30Var5;
     config.analog[0].evariation = EventAnalogVariation::Group32Var7;
@@ -33,7 +33,7 @@ void ReceiveSensorData(std::shared_ptr<IOutstation> outstation)
     try {
         boost::asio::io_context io_context;
         tcp::acceptor acceptor(io_context, tcp::endpoint(tcp::v4(), 15000));
-        std::cout << "[INFO] Listening for temperature data on port 15000..." << std::endl;
+        std::cout << "[INFO] Listening for sensor data on port 15000..." << std::endl;
 
         while (true)
         {
@@ -48,17 +48,17 @@ void ReceiveSensorData(std::shared_ptr<IOutstation> outstation)
             std::cout << "[DATA RECEIVED] " << data << std::endl;
 
             try {
-                float temperature = std::stof(data);  // Expect only the temperature value
+                float temperature = std::stof(data);
 
                 UpdateBuilder builder;
-                builder.Update(Analog(temperature), 0);  // Update analog input 0 (temperature)
+                builder.Update(Analog(temperature), 0);  // Temperature
                 outstation->Apply(builder.Build());
 
-                std::cout << "[INFO] Sent to outstation: Temperature = " << temperature << std::endl;
+                std::cout << "[INFO] Sent to outstation: T=" << temperature << std::endl;
             }
             catch (const std::exception& e)
             {
-                std::cerr << "[ERROR] Invalid temperature format: " << data << " | " << e.what() << std::endl;
+                std::cerr << "[ERROR] Invalid temperature data: " << data << " - " << e.what() << std::endl;
             }
 
             socket.close();
@@ -84,7 +84,11 @@ int main(int argc, char* argv[])
         PrintingChannelListener::Create()
     );
 
-    OutstationStackConfig config(DatabaseConfig(1, 0)); // 1 analog, 0 binary
+    DatabaseSizes dbSizes;
+    dbSizes.numAnalog = 1;   // Only 1 analog input (temperature)
+    dbSizes.numBinary = 0;
+    OutstationStackConfig config(DatabaseConfig(dbSizes));
+
     config.outstation.eventBufferConfig = EventBufferConfig::AllTypes(10);
     config.outstation.params.allowUnsolicited = true;
     config.link.LocalAddr = 10;
