@@ -21,24 +21,45 @@ using namespace asiodnp3;
 using boost::asio::ip::tcp;
 
 struct State {
+    uint32_t count = 0;
     double value = 0;
+    bool binary = false;
+    DoubleBit dbit = DoubleBit::DETERMINED_OFF;
 };
 
 void ConfigureDatabase(DatabaseConfig& config)
 {
-    // Only 1 analog input: temperature
     config.analog[0].clazz = PointClass::Class2;
     config.analog[0].svariation = StaticAnalogVariation::Group30Var5;
     config.analog[0].evariation = EventAnalogVariation::Group32Var7;
+    config.analog[1].clazz = PointClass::Class2;
+    config.analog[2].clazz = PointClass::Class2;
 }
 
 void AddUpdates(UpdateBuilder& builder, State& state, const std::string& arguments)
 {
     for (const char& c : arguments)
     {
-        if (c == 'a') {
+        switch (c)
+        {
+        case 'c':
+            builder.Update(Counter(state.count), 0);
+            ++state.count;
+            break;
+        case 'a':
             builder.Update(Analog(state.value), 0);
             state.value += 1;
+            break;
+        case 'b':
+            builder.Update(Binary(state.binary), 0);
+            state.binary = !state.binary;
+            break;
+        case 'd':
+            builder.Update(DoubleBitBinary(state.dbit), 0);
+            state.dbit = (state.dbit == DoubleBit::DETERMINED_OFF) ? DoubleBit::DETERMINED_ON : DoubleBit::DETERMINED_OFF;
+            break;
+        default:
+            break;
         }
     }
 }
@@ -63,7 +84,7 @@ void ReceiveSensorData(std::shared_ptr<IOutstation> outstation)
             std::cout << "[DATA RECEIVED] " << data << std::endl;
 
             try {
-                float temperature = std::stof(data);
+                float temperature = std::stof(data); // Only temperature expected
                 UpdateBuilder builder;
                 builder.Update(Analog(temperature), 0);
                 outstation->Apply(builder.Build());
@@ -88,7 +109,8 @@ void HandleUserInput(std::shared_ptr<IOutstation> outstation)
     State state;
     while (true)
     {
-        std::cout << "Enter 'a' to send analog update, 'quit' to exit." << std::endl;
+        std::cout << "Enter one or more measurement changes then press <enter>" << std::endl;
+        std::cout << "c = counter, b = binary, d = doublebit, a = analog, 'quit' = exit" << std::endl;
         std::cin >> input;
         if (input == "quit") exit(0);
         UpdateBuilder builder;
@@ -102,20 +124,9 @@ int main(int argc, char* argv[])
     const uint32_t FILTERS = levels::NORMAL | levels::ALL_COMMS;
     DNP3Manager manager(1, ConsoleLogger::Create());
 
-    auto channel = manager.AddTCPServer(
-        "server",
-        FILTERS,
-        ChannelRetry::Default(),
-        "0.0.0.0",
-        20000,
-        PrintingChannelListener::Create()
-    );
+    auto channel = manager.AddTCPServer("server", FILTERS, ChannelRetry::Default(), "0.0.0.0", 20000, PrintingChannelListener::Create());
 
-    DatabaseSizes dbSizes;
-    dbSizes.numAnalog = 1;
-    dbSizes.numBinary = 0;
-    OutstationStackConfig config(DatabaseConfig(dbSizes));
-
+    OutstationStackConfig config(DatabaseSizes::AllTypes(10));
     config.outstation.eventBufferConfig = EventBufferConfig::AllTypes(10);
     config.outstation.params.allowUnsolicited = true;
     config.link.LocalAddr = 10;
@@ -124,13 +135,7 @@ int main(int argc, char* argv[])
 
     ConfigureDatabase(config.dbConfig);
 
-    auto outstation = channel->AddOutstation(
-        "outstation",
-        SuccessCommandHandler::Create(),
-        DefaultOutstationApplication::Create(),
-        config
-    );
-
+    auto outstation = channel->AddOutstation("outstation", SuccessCommandHandler::Create(), DefaultOutstationApplication::Create(), config);
     outstation->Enable();
 
     std::thread sensorThread(ReceiveSensorData, outstation);
