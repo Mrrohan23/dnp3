@@ -20,12 +20,27 @@ using namespace asiopal;
 using namespace asiodnp3;
 using boost::asio::ip::tcp;
 
+struct State {
+    double value = 0;
+};
+
 void ConfigureDatabase(DatabaseConfig& config)
 {
-    // Temperature analog input
+    // Only 1 analog input: temperature
     config.analog[0].clazz = PointClass::Class2;
     config.analog[0].svariation = StaticAnalogVariation::Group30Var5;
     config.analog[0].evariation = EventAnalogVariation::Group32Var7;
+}
+
+void AddUpdates(UpdateBuilder& builder, State& state, const std::string& arguments)
+{
+    for (const char& c : arguments)
+    {
+        if (c == 'a') {
+            builder.Update(Analog(state.value), 0);
+            state.value += 1;
+        }
+    }
 }
 
 void ReceiveSensorData(std::shared_ptr<IOutstation> outstation)
@@ -49,15 +64,12 @@ void ReceiveSensorData(std::shared_ptr<IOutstation> outstation)
 
             try {
                 float temperature = std::stof(data);
-
                 UpdateBuilder builder;
-                builder.Update(Analog(temperature), 0);  // Temperature
+                builder.Update(Analog(temperature), 0);
                 outstation->Apply(builder.Build());
-
                 std::cout << "[INFO] Sent to outstation: T=" << temperature << std::endl;
             }
-            catch (const std::exception& e)
-            {
+            catch (const std::exception& e) {
                 std::cerr << "[ERROR] Invalid temperature data: " << data << " - " << e.what() << std::endl;
             }
 
@@ -67,6 +79,21 @@ void ReceiveSensorData(std::shared_ptr<IOutstation> outstation)
     catch (const std::exception& e)
     {
         std::cerr << "[ERROR] Exception in ReceiveSensorData: " << e.what() << std::endl;
+    }
+}
+
+void HandleUserInput(std::shared_ptr<IOutstation> outstation)
+{
+    string input;
+    State state;
+    while (true)
+    {
+        std::cout << "Enter 'a' to send analog update, 'quit' to exit." << std::endl;
+        std::cin >> input;
+        if (input == "quit") exit(0);
+        UpdateBuilder builder;
+        AddUpdates(builder, state, input);
+        outstation->Apply(builder.Build());
     }
 }
 
@@ -85,7 +112,7 @@ int main(int argc, char* argv[])
     );
 
     DatabaseSizes dbSizes;
-    dbSizes.numAnalog = 1;   // Only 1 analog input (temperature)
+    dbSizes.numAnalog = 1;
     dbSizes.numBinary = 0;
     OutstationStackConfig config(DatabaseConfig(dbSizes));
 
@@ -107,7 +134,10 @@ int main(int argc, char* argv[])
     outstation->Enable();
 
     std::thread sensorThread(ReceiveSensorData, outstation);
+    std::thread inputThread(HandleUserInput, outstation);
+
     sensorThread.join();
+    inputThread.join();
 
     return 0;
 }
