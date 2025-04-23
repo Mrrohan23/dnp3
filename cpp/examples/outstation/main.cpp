@@ -20,62 +20,12 @@ using namespace asiopal;
 using namespace asiodnp3;
 using boost::asio::ip::tcp;
 
-struct State {
-    uint32_t count = 0;
-    double value = 0;
-    bool binary = false;
-    DoubleBit dbit = DoubleBit::DETERMINED_OFF;
-};
-
 void ConfigureDatabase(DatabaseConfig& config)
 {
-    // Temperature
+    // Only configure Analog 0 for temperature
     config.analog[0].clazz = PointClass::Class2;
     config.analog[0].svariation = StaticAnalogVariation::Group30Var5;
     config.analog[0].evariation = EventAnalogVariation::Group32Var7;
-
-    // Pressure
-    config.analog[1].clazz = PointClass::Class2;
-    config.analog[1].svariation = StaticAnalogVariation::Group30Var5;
-    config.analog[1].evariation = EventAnalogVariation::Group32Var7;
-
-    // Humidity
-    config.analog[2].clazz = PointClass::Class2;
-    config.analog[2].svariation = StaticAnalogVariation::Group30Var5;
-    config.analog[2].evariation = EventAnalogVariation::Group32Var7;
-
-    // Binary input (e.g., switch)
-    config.binary[0].clazz = PointClass::Class1;
-    config.binary[0].svariation = StaticBinaryVariation::Group1Var2;
-    config.binary[0].evariation = EventBinaryVariation::Group2Var2;
-}
-
-void AddUpdates(UpdateBuilder& builder, State& state, const std::string& arguments)
-{
-    for (const char& c : arguments)
-    {
-        switch (c)
-        {
-        case 'c':
-            builder.Update(Counter(state.count), 0);
-            ++state.count;
-            break;
-        case 'a':
-            builder.Update(Analog(state.value), 0);
-            state.value += 1;
-            break;
-        case 'b':
-            builder.Update(Binary(state.binary), 0);
-            state.binary = !state.binary;
-            break;
-        case 'd':
-            builder.Update(DoubleBitBinary(state.dbit), 0);
-            state.dbit = (state.dbit == DoubleBit::DETERMINED_OFF) ? DoubleBit::DETERMINED_ON : DoubleBit::DETERMINED_OFF;
-            break;
-        default:
-            break;
-        }
-    }
 }
 
 void ReceiveSensorData(std::shared_ptr<IOutstation> outstation)
@@ -83,7 +33,7 @@ void ReceiveSensorData(std::shared_ptr<IOutstation> outstation)
     try {
         boost::asio::io_context io_context;
         tcp::acceptor acceptor(io_context, tcp::endpoint(tcp::v4(), 15000));
-        std::cout << "[INFO] Listening for sensor data on port 15000..." << std::endl;
+        std::cout << "[INFO] Listening for temperature data on port 15000..." << std::endl;
 
         while (true)
         {
@@ -97,34 +47,18 @@ void ReceiveSensorData(std::shared_ptr<IOutstation> outstation)
             std::string data(buffer);
             std::cout << "[DATA RECEIVED] " << data << std::endl;
 
-            std::istringstream iss(data);
-            std::string tempStr, pressStr, humidStr, binaryStr;
-
-            if (std::getline(iss, tempStr, ',') &&
-                std::getline(iss, pressStr, ',') &&
-                std::getline(iss, humidStr, ',') &&
-                std::getline(iss, binaryStr, ','))
-            {
-                float temperature = std::stof(tempStr);
-                float pressure = std::stof(pressStr);
-                float humidity = std::stof(humidStr);
-                bool binary = std::stoi(binaryStr);
+            try {
+                float temperature = std::stof(data);  // Expect only the temperature value
 
                 UpdateBuilder builder;
-                builder.Update(Analog(temperature), 0);  // Temperature
-                builder.Update(Analog(pressure), 1);     // Pressure
-                builder.Update(Analog(humidity), 2);     // Humidity
-                builder.Update(Binary(binary), 0);       // Binary input
-
+                builder.Update(Analog(temperature), 0);  // Update analog input 0 (temperature)
                 outstation->Apply(builder.Build());
 
-                std::cout << "[INFO] Sent to outstation: T=" << temperature
-                          << ", P=" << pressure << ", H=" << humidity
-                          << ", B=" << binary << std::endl;
+                std::cout << "[INFO] Sent to outstation: Temperature = " << temperature << std::endl;
             }
-            else
+            catch (const std::exception& e)
             {
-                std::cerr << "[ERROR] Invalid format: " << data << std::endl;
+                std::cerr << "[ERROR] Invalid temperature format: " << data << " | " << e.what() << std::endl;
             }
 
             socket.close();
@@ -133,23 +67,6 @@ void ReceiveSensorData(std::shared_ptr<IOutstation> outstation)
     catch (const std::exception& e)
     {
         std::cerr << "[ERROR] Exception in ReceiveSensorData: " << e.what() << std::endl;
-    }
-}
-
-void HandleUserInput(std::shared_ptr<IOutstation> outstation)
-{
-    string input;
-    State state;
-    while (true)
-    {
-        std::cout << "Enter one or more measurement changes then press <enter>" << std::endl;
-        std::cout << "c = counter, b = binary, d = doublebit, a = analog, 'quit' = exit" << std::endl;
-        std::cin >> input;
-        if (input == "quit") exit(0);
-
-        UpdateBuilder builder;
-        AddUpdates(builder, state, input);
-        outstation->Apply(builder.Build());
     }
 }
 
@@ -167,9 +84,7 @@ int main(int argc, char* argv[])
         PrintingChannelListener::Create()
     );
 
-   
-    OutstationStackConfig config(DatabaseConfig(3, 1));
-
+    OutstationStackConfig config(DatabaseConfig(1, 0)); // 1 analog, 0 binary
     config.outstation.eventBufferConfig = EventBufferConfig::AllTypes(10);
     config.outstation.params.allowUnsolicited = true;
     config.link.LocalAddr = 10;
@@ -188,10 +103,7 @@ int main(int argc, char* argv[])
     outstation->Enable();
 
     std::thread sensorThread(ReceiveSensorData, outstation);
-    std::thread inputThread(HandleUserInput, outstation);
-
     sensorThread.join();
-    inputThread.join();
 
     return 0;
 }
