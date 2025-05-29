@@ -6,7 +6,9 @@
 #include <boost/asio.hpp>
 #include <openpal/logging/LogLevels.h>
 #include <asiopal/UTCTimeSource.h>
+#include <openpal/executor/MonotonicTimestamp.h>   // NEW
 #include <opendnp3/LogLevels.h>
+#include <opendnp3/app/DNPTime.h>                  // NEW
 #include <opendnp3/outstation/IUpdateHandler.h>
 #include <opendnp3/outstation/SimpleCommandHandler.h>
 #include <asiodnp3/DNP3Manager.h>
@@ -23,15 +25,12 @@ using namespace asiodnp3;
 
 void ConfigureDatabase(DatabaseConfig& config)
 {
-    // Device 101 → Analog 0,1,2 ; Device 102 → Analog 3,4,5
     for (int i = 0; i < 6; ++i)
     {
         config.analog[i].clazz = PointClass::Class1;
         config.analog[i].svariation = StaticAnalogVariation::Group30Var1;
         config.analog[i].evariation = EventAnalogVariation::Group32Var1;
     }
-
-    // Binary input 0 (common to both)
     config.binary[0].clazz = PointClass::Class1;
 }
 
@@ -70,20 +69,23 @@ void ReceiveSensorData(std::shared_ptr<IOutstation> outstation)
                 float humidity = std::stof(humidStr);
                 bool binaryValue = (binaryStr == "1");
 
+                // Get current timestamp
+                auto now = openpal::MonotonicTimestamp::Now();
+                DNPTime ts(now.GetMilliseconds());
+
                 UpdateBuilder builder;
 
-                // Assign analog index based on deviceId
                 if (deviceId == 101)
                 {
-                    builder.Update(Analog(temperature), 0);
-                    builder.Update(Analog(pressure), 1);
-                    builder.Update(Analog(humidity), 2);
+                    builder.Update(Analog(temperature, 0x01, ts), 0);
+                    builder.Update(Analog(pressure, 0x01, ts), 1);
+                    builder.Update(Analog(humidity, 0x01, ts), 2);
                 }
                 else if (deviceId == 102)
                 {
-                    builder.Update(Analog(temperature), 3);
-                    builder.Update(Analog(pressure), 4);
-                    builder.Update(Analog(humidity), 5);
+                    builder.Update(Analog(temperature, 0x01, ts), 3);
+                    builder.Update(Analog(pressure, 0x01, ts), 4);
+                    builder.Update(Analog(humidity, 0x01, ts), 5);
                 }
                 else
                 {
@@ -91,7 +93,7 @@ void ReceiveSensorData(std::shared_ptr<IOutstation> outstation)
                     continue;
                 }
 
-                builder.Update(Binary(binaryValue), 0); // Binary input 0 shared
+                builder.Update(Binary(binaryValue, 0x01, ts), 0); // Shared binary
 
                 outstation->Apply(builder.Build());
 
@@ -132,8 +134,8 @@ int main(int argc, char* argv[])
     OutstationStackConfig config(DatabaseSizes::AllTypes(10));
     config.outstation.eventBufferConfig = EventBufferConfig::AllTypes(10);
     config.outstation.params.allowUnsolicited = true;
-    config.link.LocalAddr = 10;  // RTU address
-    config.link.RemoteAddr = 1;  // SCADA master
+    config.link.LocalAddr = 10;
+    config.link.RemoteAddr = 1;
     config.link.KeepAliveTimeout = openpal::TimeDuration::Max();
 
     ConfigureDatabase(config.dbConfig);
