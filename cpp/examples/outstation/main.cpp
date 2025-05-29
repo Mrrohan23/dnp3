@@ -32,8 +32,10 @@ void ConfigureDatabase(DatabaseConfig& config)
     config.analog[0].clazz = PointClass::Class2;
     config.analog[0].svariation = StaticAnalogVariation::Group30Var5;
     config.analog[0].evariation = EventAnalogVariation::Group32Var7;
+    
     config.analog[1].clazz = PointClass::Class2;
-    config.analog[2].clazz = PointClass::Class2;
+    config.analog[1].svariation = StaticAnalogVariation::Group30Var5;
+    config.analog[1].evariation = EventAnalogVariation::Group32Var7;
 }
 
 void AddUpdates(UpdateBuilder& builder, State& state, const std::string& arguments)
@@ -84,14 +86,25 @@ void ReceiveSensorData(std::shared_ptr<IOutstation> outstation)
             std::cout << "[DATA RECEIVED] " << data << std::endl;
 
             try {
-                float temperature = std::stof(data); // Only temperature expected
-                UpdateBuilder builder;
-                builder.Update(Analog(temperature), 0);
-                outstation->Apply(builder.Build());
-                std::cout << "[INFO] Sent to outstation: T=" << temperature << std::endl;
+                std::istringstream ss(data);
+                std::string token;
+                std::getline(ss, token, ',');
+                int deviceId = std::stoi(token);
+                std::getline(ss, token, ',');
+                float temperature = std::stof(token);
+
+                if (deviceId >= 0 && deviceId <= 1) {
+                    UpdateBuilder builder;
+                    builder.Update(Analog(temperature), deviceId);
+                    outstation->Apply(builder.Build());
+                    std::cout << "[INFO] Sent to outstation: Device " << deviceId << " Temperature=" << temperature << std::endl;
+                }
+                else {
+                    std::cerr << "[WARN] Unsupported device ID: " << deviceId << std::endl;
+                }
             }
             catch (const std::exception& e) {
-                std::cerr << "[ERROR] Invalid temperature data: " << data << " - " << e.what() << std::endl;
+                std::cerr << "[ERROR] Invalid data format: " << data << " - " << e.what() << std::endl;
             }
 
             socket.close();
